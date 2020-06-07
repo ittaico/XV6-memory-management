@@ -32,6 +32,20 @@ struct context {
   uint eip;
 };
 
+// Swap Details
+struct sDet{
+  char* va;                   // virtual adress
+  char inSF;                  // inside the swap file
+};
+
+// Page Details
+struct pDet{
+  void* va;                   // virtual adress
+  void* page;                 // process page
+  uint time;                  // age of page
+  char inMem;                 // found in memory
+};
+
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -51,7 +65,20 @@ struct proc {
   char name[16];               // Process name (debugging)
   //Swap file. must initiate with create swap file
   struct file *swapFile;      //page file
+
+  int pim;                      // pages in memory
+  int sp;                       // swaped pages
+  int ts;                       // total swaps
+  int pf;                       // page faults
+
+  int head;                     // head of the linked list
+  int tail;                     // tail of the linked list
+ 
+  struct pDet pd[MAX_PSYC_PAGES]; //page details
+  struct sDet sd[MAX_PSYC_PAGES]; //swap details
 };
+
+
 
 // Process memory is laid out contiguously, low addresses first:
 //   text

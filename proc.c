@@ -18,6 +18,9 @@ int nextpid = 1;
 extern void forkret(void);
 extern void trapret(void);
 
+extern int freePages;
+extern int totalFreePages;
+
 static void wakeup1(void *chan);
 
 void
@@ -111,6 +114,20 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
+  
+  #ifndef NONE
+  p->pim = 0;
+  p->sp = 0;
+  p->ts = 0;
+  p->pf = 0;
+  p->head = 0;
+  p->tail = 0;
+  
+  for(int i = 0 ; i < MAX_PSYC_PAGES ; i++){
+    p->sd[i].inSF = 0;
+    p->pd[i].inMem = 0;
+  }
+  #endif
 
   return p;
 }
@@ -524,6 +541,15 @@ procdump(void)
     else
       state = "???";
     cprintf("%d %s %s", p->pid, state, p->name);
+
+     #ifndef NONE
+    cprintf("allocated memory pages: %d, paged out: %d, page faults: %d, total number of paged out pages: %d\n",
+      p->pim + p->sp,
+      p->sp, 
+      p->pf,
+      p->ts);
+    #endif
+
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
@@ -531,4 +557,6 @@ procdump(void)
     }
     cprintf("\n");
   }
+  cprintf("\n");
+  cprintf("%d / %d free page frames in the system\n",freePages,totalFreePages);
 }

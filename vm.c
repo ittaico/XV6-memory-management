@@ -385,6 +385,42 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
   return 0;
 }
 
+//
+void
+swapAndWrite(int pageNum, struct  proc *p){
+  uint location;
+  int count,i;
+  struct sDet *sd;
+  pte_t *pte = walkpgdir(p->pgdir, p->pd[pageNum].va,0);
+  if(!*pte){
+    panic("error - no page table entry");
+  }
+  else{
+    for(sd = p->sd,count = 0; sd < &p->sd[MAX_PSYC_PAGES];sd++){
+      if(!sd->inSF){
+        break;
+      }
+      count++
+    }
+    if (sd >= &p->sd[MAX_PSYC_PAGES]){
+      panic("Swap File is Full");
+    }
+    location = count*PGSIZE;
+    int qPGSIZE = PGSIZE/4;
+    for (i=0; i<4; i++){
+      writeToSwapFile(p,p->pd[pageNum].page + (i * qPGSIZE), location + (i * qPGSIZE), qPGSIZE);  //writeToSwapFile(proc *p,char * buffer,uint fileOffset,uint size)
+    }
+    sd->va = p->pd[count].va;     //Update the virtual address
+    sd->inSF = 1;                 //Update the InSwapFile flag
+    kfree(p->pd[count].page);     //Free the page from the memory
+    pageRemoveUpdate(p->pd[count].va,p);  //*************************
+    p->sp++;            //increase the Swap Page counter of the process
+    p->ts++;            //invrease the Total Swap Page counter of the process
+    *pte = (*pte | PTE_PG) & ~PTE_P;      //WTF?????
+    lcr3(V2P(p->pgdir));            // By using the LCR3 rgister and the V2P funcation we update the Page Directory 
+  }
+}
+
 //PAGEBREAK!
 // Blank page.
 //PAGEBREAK!
@@ -392,3 +428,4 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 //PAGEBREAK!
 // Blank page.
 
+ 
