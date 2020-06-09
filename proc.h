@@ -42,7 +42,7 @@ struct sDet{
 struct pDet{
   void* va;                   // virtual adress
   void* page;                 // process page
-  uint time;                  // age of page
+  uint accCount;              // age of page
   char inMem;                 // found in memory
 };
 

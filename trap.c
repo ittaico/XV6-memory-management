@@ -36,6 +36,12 @@ idtinit(void)
 void
 trap(struct trapframe *tf)
 {
+  #ifndef NONE
+      pte_t* pte;
+      uint va;
+      int swapFileIndex;
+  #endif
+
   if(tf->trapno == T_SYSCALL){
     if(myproc()->killed)
       exit();
@@ -77,6 +83,29 @@ trap(struct trapframe *tf)
             cpuid(), tf->cs, tf->eip);
     lapiceoi();
     break;
+
+  #ifndef NONE
+    case T_PGFLT:
+      cprintf("Get into the trap\n");
+      va = PGROUNDDOWN(rcr2());
+      cprintf("Get into the trap: the va is: %d\n",va);
+      pte = walkpgdir2(myproc()->pgdir, (void*) va);
+      cprintf("Get into the trap:the pte is %d\n",(uint)*pte);
+      cprintf("Get into the trap:the PTE_PG is %d\n",PTE_PG);
+      cprintf("Get into the trap:the PTE_U is %d\n",PTE_U);
+      if(((uint)*pte) & PTE_PG){
+        cprintf("Get into If\n");
+        myproc()->pf++;
+        if(myproc()->pim > MAX_PSYC_PAGES)
+          panic("trap: T_PGFLT - memory full");
+        if(myproc()->pim == MAX_PSYC_PAGES){
+          swapFileIndex = pageSelector(myproc());
+          swapAndWrite(swapFileIndex, myproc());
+        }
+        swapAndRead((void*) va, myproc());
+        return;
+      }
+    #endif
 
   //PAGEBREAK: 13
   default:

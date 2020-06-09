@@ -28,10 +28,25 @@ seginit(void)
   c->gdt[SEG_UDATA] = SEG(STA_W, 0, 0xffffffff, DPL_USER);
   lgdt(c->gdt, sizeof(c->gdt));
 }
+ //***TOCHANGE***
+
+pte_t* walkpgdir2(pde_t *pgdir, const void *va){
+  pde_t *pde;
+  pte_t *pgtab;
+  pde = &pgdir[PDX(va)];
+  if(*pde & PTE_P){
+    pgtab = (pte_t*)P2V(PTE_ADDR(*pde));
+    return &pgtab[PTX(va)];
+  } else return 0;
+}
+
+
 
 // Return the address of the PTE in page table pgdir
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page table pages.
+
+
 static pte_t *
 walkpgdir(pde_t *pgdir, const void *va, int alloc)
 {
@@ -53,6 +68,7 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
   }
   return &pgtab[PTX(va)];
 }
+
 
 // Create PTEs for virtual addresses starting at va that refer to
 // physical addresses starting at pa. va and size might not
@@ -244,6 +260,17 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
       kfree(mem);
       return 0;
     }
+
+    #ifndef NONE
+      if(myproc()->pim > MAX_PSYC_PAGES){
+        panic("memory full");
+      }
+      if(myproc()->pim == MAX_PSYC_PAGES){
+        int swapFileIndex = pageSelector(myproc());
+        swapAndWrite(swapFileIndex, myproc());
+      }
+      updatePages((void*) a, mem, myproc());
+    #endif
   }
   return newsz;
 }
@@ -257,6 +284,7 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
   pte_t *pte;
   uint a, pa;
+
 
   if(newsz >= oldsz)
     return oldsz;
@@ -273,7 +301,27 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
       char *v = P2V(pa);
       kfree(v);
       *pte = 0;
+       #ifndef NONE
+        if(myproc()->pgdir == pgdir){
+          removePageAndUpdate((void*) a, myproc());
+        }
+      #endif
     }
+  #ifndef NONE
+      //Checking if the paged out to secondary storage
+     else if (*pte & PTE_PG && myproc()->pgdir == pgdir) {
+      int i;
+      for (i = 0; i < MAX_PSYC_PAGES; i++) {
+        if (myproc()->sd[i].va == (char*)a)
+          break;
+      }
+      if (i == MAX_PSYC_PAGES || myproc()->sd[i].inSF == 0)
+          panic("error - deallocuvm fuinction - Paged not out to secondary storage");
+      myproc()->sd[i].inSF = 0;     
+      myproc()->sp--;
+      *pte = 0;
+    }
+   #endif
   }
   return newsz;
 }
@@ -317,6 +365,7 @@ copyuvm(pde_t *pgdir, uint sz)
 {
   pde_t *d;
   pte_t *pte;
+  pte_t * pte2level;
   uint pa, i, flags;
   char *mem;
 
@@ -327,6 +376,13 @@ copyuvm(pde_t *pgdir, uint sz)
       panic("copyuvm: pte should exist");
     if(!(*pte & PTE_P))
       panic("copyuvm: page not present");
+    if(*pte & PTE_PG){
+      pte2level = walkpgdir(d, (void *) i, 1);
+      flags = PTE_FLAGS(*pte);                         //copy the parent flags
+      *pte2level = PTE_U | PTE_PG | PTE_W | PTE_ADDR(*pte) | (int) flags;     //update the flags
+      *pte2level = *pte2level & ~PTE_P;              //clear the PTE_P flag
+      continue;
+    }
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -385,7 +441,7 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
   return 0;
 }
 
-//
+// writing to the swap file
 void
 swapAndWrite(int pageNum, struct  proc *p){
   uint location;
@@ -400,7 +456,7 @@ swapAndWrite(int pageNum, struct  proc *p){
       if(!sd->inSF){
         break;
       }
-      count++
+      count++;
     }
     if (sd >= &p->sd[MAX_PSYC_PAGES]){
       panic("Swap File is Full");
@@ -413,19 +469,297 @@ swapAndWrite(int pageNum, struct  proc *p){
     sd->va = p->pd[count].va;     //Update the virtual address
     sd->inSF = 1;                 //Update the InSwapFile flag
     kfree(p->pd[count].page);     //Free the page from the memory
-    pageRemoveUpdate(p->pd[count].va,p);  //*************************
+    removePageAndUpdate(p->pd[count].va,p);  //*************************
     p->sp++;            //increase the Swap Page counter of the process
-    p->ts++;            //invrease the Total Swap Page counter of the process
-    *pte = (*pte | PTE_PG) & ~PTE_P;      //WTF?????
+    p->ts++;            //increase the Total Swap Page counter of the process
+    *pte = (*pte | PTE_PG) & ~PTE_P;      //**************************
     lcr3(V2P(p->pgdir));            // By using the LCR3 rgister and the V2P funcation we update the Page Directory 
   }
 }
 
-//PAGEBREAK!
-// Blank page.
-//PAGEBREAK!
-// Blank page.
-//PAGEBREAK!
-// Blank page.
 
- 
+// Returns the index of the page to to be removed, according to the different page replacement scheme.
+int
+pageSelector(struct proc *p){
+  int ans = -1;
+  // NFU + AGING
+  // Find the page that is 'accCount' var is the lowest. 
+  #ifdef NFUA
+    uint lowest = 0xffffffff;
+    for(int i = 0 ; i < MAX_PSYC_PAGES ; i++){
+      if(!p->pd[i].inMem ){
+        panic("error - page is not in memory");
+      }
+      pte_t* pte = walkpgdir2(p->pgdir, p->pd[i].va);
+      if(!(*pte & PTE_U)){
+        continue;
+      }
+      if(p->pd[i].accCount <= lowest){
+        lowest = p->pd[i].accCount;
+        ans = i;
+      }
+    }
+  #endif
+
+  // Leaset accesed page + AGING
+  // Find the page with the lowest 1's in 'accCount',
+  // if the number of 1 in 'accCount' is equale, then take the the lowest 'accCount'
+  #ifdef LAPA
+  uint minNumberOf1 = 33;
+  uint lowest = 0xffffffff;
+  for(int i = 0 ; i < MAX_PSYC_PAGES ; i++){
+    if(!p->pd[i].inMem){
+      panic("error - page not in memory");
+    }
+    pte_t* pte = walkpgdir2(p->pgdir, p->pd[i].va);
+    if(!(*pte & PTE_U)){
+      continue;
+    }
+    uint currentaccCount = p->pd[i].accCount;
+    int countNumOf1 = 0;
+    while(currentaccCount) {
+        countNumOf1 += currentaccCount % 2;   
+        currentaccCount >>= 1;
+    }
+
+    if(countNumOf1 < minNumberOf1 || (countNumOf1 == minNumberOf1 && p->pd[i].accCount <= lowest)){
+      lowest = p->pd[i].accCount;
+      minNumberOf1 = countNumOf1;
+      ans = i;
+    }
+  }
+  #endif
+
+  // Second chance FIFO
+  // Find the first page (FIFO) that its PTE_A is 0.
+  #ifdef SCFIFO
+    int accessed = 1;
+
+    //loop unntil we find a page which wan't accessed.
+    while(accessed) {
+      if(!p->pd[p->head].inMem){
+        panic("error - page not in memory");
+      }
+      pte_t* pte = walkpgdir2(p->pgdir, p->pd[p->head].va);
+      if(!(*pte & PTE_U)){
+        p->head = (p->head + 1) % MAX_PSYC_PAGES;
+        continue;
+      }
+      accessed = *pte & PTE_A;                      
+      *pte = *pte & ~PTE_A;
+      p->head = (p->head + 1) % MAX_PSYC_PAGES;
+    }
+    //return the first page that wasn't accessed (we go back -1 because of the loop) 
+    ans = (p->head + MAX_PSYC_PAGES - 1) % MAX_PSYC_PAGES;
+  #endif
+
+  // Advancing Queue
+  #ifdef AQ
+    int i;
+    for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+      if(!p->pd[i].inMem){
+        panic("error - page not in memory");
+      }
+    }
+
+    for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+      pte_t* pte = walkpgdir2(p->pgdir, p->pd[i].va);
+      if((*pte & PTE_U)){
+        break;
+      }
+    }
+    ans = i;
+  #endif
+
+
+  if((ans < 0)||ans >= MAX_PSYC_PAGES){
+    panic("error - pageSelector end function - page limit violation");
+  }
+  return ans;
+}
+
+//The function will get the virtual address and the process and will remove 
+//page from the struct, and update the relevnt vars in the process struct
+void
+removePageAndUpdate(void *va,struct proc *p){
+  int i;   
+  //Case for NFUA/LAPA/SCFIFO
+   #ifndef AQ
+    for(i = 0; i < MAX_PSYC_PAGES; i++)
+      if(p->pd[i].va == va)
+        break;
+    if(i == MAX_PSYC_PAGES)
+      return;
+    if (p->pd[i].inMem == 1){
+      p->pd[i].inMem = 0;
+      p->pd[i].va = 0;
+      p->pim--;
+    }
+  #endif  
+
+
+  #ifdef AQ
+    for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+      if(p->pd[i].va == va){
+        break;
+      }
+    }
+    if (i >= p->pim)
+        panic("removePageAndUpdate function - index is illegal");
+    while(i < p->pim - 1){
+      p->pd[i].va = p->pd[i+1].va;
+      p->pd[i].page = p->pd[i+1].page;
+      if (p->pd[i].inMem == 0 || p->pd[i+1].inMem == 0)
+          panic("error - page not in memory");
+      i++;
+    } 
+    //Remove the last page in the memory
+    if (p->pd[p->pim - 1].inMem){
+      p->pd[p->pim - 1].inMem = 0;
+      p->pd[p->pim - 1].va = 0;
+      p->pim--;
+    } else panic("error - page not in memory");
+  #endif
+  }
+
+  /*
+    #ifdef NFUA
+    for(i = 0; i < MAX_PSYC_PAGES; i++)
+      if(p->pd[i].va == va)
+        break;
+    if(i == MAX_PSYC_PAGES)
+      return;
+    if (p->pd[i].inMem == 1){
+      p->pd[i].inMem = 0;
+      p->pd[i].va = 0;
+      p->pim--;
+    }
+  #endif
+
+
+  #ifdef LAPA
+    int i;
+    for(i = 0; i < MAX_PSYC_PAGES; i++){
+      if(p->pages[i].va == va){
+        break;
+      }
+    }
+    if(i == MAX_PSYC_PAGES){
+      return;
+    }
+    if (p->pages[i].isInMemory == 1){
+      p->pages[i].isInMemory = 0;
+      p->pages[i].va = 0;
+      p->pagesInMem--;
+    }
+  #endif
+
+  #ifdef SCFIFO
+    int i;
+    for(i = 0; i < MAX_PSYC_PAGES; i++){
+      if(p->pages[i].va == va){
+        break;
+      }
+    }
+    if(i == MAX_PSYC_PAGES){
+      return;
+    }
+    if (p->pages[i].isInMemory == 1){
+      p->pages[i].isInMemory = 0;
+      p->pages[i].va = 0;
+      p->pagesInMem--;
+    }
+  #endif
+
+  #ifdef AQ
+    int i;
+    for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+      if(p->pages[i].va == va){
+        break;
+      }
+    }
+    if (i >= p->pagesInMem)
+        panic("index is illegal");
+    while(i < p->pagesInMem - 1){
+      p->pages[i].va = p->pages[i+1].va;
+      p->pages[i].pPage = p->pages[i+1].pPage;
+      if (p->pages[i].isInMemory == 0 || p->pages[i+1].isInMemory == 0)
+          panic("error");
+      i++;
+    } 
+    if (p->pages[p->pagesInMem - 1].isInMemory){
+      p->pages[p->pagesInMem - 1].isInMemory = 0;
+      p->pages[p->pagesInMem - 1].va = 0;
+      p->pagesInMem--;
+    } else panic("error");
+  #endif
+  
+}
+*/
+//The function will update the pages after read and at the allocuvm
+void
+updatePages(void *va,void *page,struct proc *p){
+  int i;
+  for(i = 0; i < MAX_PSYC_PAGES; i++){
+    if(p->pd[i].inMem == 0){
+      break;
+    }
+  }
+  if(i == MAX_PSYC_PAGES){
+    panic("function updatePages - memory is full");
+  }
+
+  //NFUA
+  #ifdef NFUA
+    p->pd[i].accCount = 0;
+  #endif
+
+  //LAPA
+  #ifdef LAPA
+    p->pd[i].accCount = 0xffffffff;
+  #endif
+  p->pd[i].inMem = 1;
+  p->pd[i].va = va;
+  p->pd[i].page = page;
+  p->pim++;
+}
+
+void
+swapAndRead(void *va,struct proc *p){
+  struct sDet* sd;
+  int i;
+  cprintf("the VA is:%d \n",va);
+  for(sd = p->sd,i = 0; sd < &p->sd[MAX_PSYC_PAGES] ; sd++,i++){
+      cprintf("the sd->VA is:%d \n",sd->va);
+    if(sd->inSF && sd->va == va){
+      break;
+    }
+  }
+  if(sd >= &p->sd[MAX_PSYC_PAGES]){
+    panic("error - swapAndRead function -sd MAX");
+  }
+  pte_t* pte = walkpgdir(p->pgdir, va, 1);
+  if(!*pte){
+    panic("error - swapAndRead function - Not pte");
+  }
+  char* newPage = kalloc();
+  uint location = i * PGSIZE;
+  int qPGSIZE = PGSIZE/4;
+  for(i = 0 ; i < 4 ; i++){
+    readFromSwapFile(p, newPage + (i * qPGSIZE), location + (i * qPGSIZE), qPGSIZE);
+  }
+  *pte = (V2P(newPage) | PTE_P | PTE_U | PTE_W) & ~PTE_PG;
+  sd->inSF = 0;
+  updatePages(va, newPage, p);
+  p->sp--;
+  lcr3(V2P(p->pgdir));
+}
+
+
+
+//PAGEBREAK!
+// Blank page.             
+//PAGEBREAK!              
+// Blank page.     
+//PAGEBREAK!       
+// Blank page.  

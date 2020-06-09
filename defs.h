@@ -132,6 +132,7 @@ int             wait(void);
 void            wakeup(void*);
 void            yield(void);
 
+
 // swtch.S
 void            swtch(struct context**, struct context*);
 
@@ -196,6 +197,15 @@ void            switchuvm(struct proc*);
 void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
+
+pte_t*			walkpgdir2(pde_t*, const void*);
+void			swapAndWrite(int , struct  proc*);
+int 			pageSelector(struct proc*);
+void			removePageAndUpdate(void*,struct proc*);
+void			updatePages(void*,void*,struct proc*);
+void 			swapAndRead(void*,struct proc*);
+
+
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

@@ -7,6 +7,7 @@
 #include "proc.h"
 #include "spinlock.h"
 
+void updatePageingFrameWork();
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -122,7 +123,7 @@ found:
   p->pf = 0;
   p->head = 0;
   p->tail = 0;
-  
+
   for(int i = 0 ; i < MAX_PSYC_PAGES ; i++){
     p->sd[i].inSF = 0;
     p->pd[i].inMem = 0;
@@ -213,6 +214,38 @@ fork(void)
     np->state = UNUSED;
     return -1;
   }
+
+  #ifndef NONE
+    np->pim = curproc->pim;
+    np->sp = curproc->sp;
+    createSwapFile(np);
+    if(strncmp(curproc->name,"init",4) && strncmp(curproc->name,"sh",2)) {
+        int hPGZIE = PGSIZE / 2;
+        char buffer[hPGZIE];
+        uint offset = 0;
+        uint size = 0;
+        while((size = readFromSwapFile(curproc, buffer, offset, hPGZIE)) > 0){
+            if (writeToSwapFile(np, buffer, offset, size) < 0) {
+                panic("error - fork: not write to file");
+            }
+            offset = offset + size;
+        }
+    }
+    for(i = 0; i < MAX_PSYC_PAGES ; i++){
+      np->sd[i].va = curproc->sd[i].va;
+      np->sd[i].inSF = curproc->sd[i].inSF;
+    }
+
+    for(i = 0 ; i < MAX_TOTAL_PAGES - MAX_PSYC_PAGES ; i++){
+      np->pd[i].accCount = curproc->pd[i].accCount;
+      np->pd[i].va = curproc->pd[i].va;
+      np->pd[i].page = curproc->pd[i].page;
+      np->pd[i].inMem = curproc->pd[i].inMem;
+    }
+    np->head = curproc->head;
+    np->tail = curproc->tail;
+  #endif
+
   np->sz = curproc->sz;
   np->parent = curproc;
   *np->tf = *curproc->tf;
@@ -250,6 +283,23 @@ exit(void)
 
   if(curproc == initproc)
     panic("init exiting");
+
+  #ifndef NONE
+  if(removeSwapFile(curproc) != 0){
+    panic("error - exit: removeSwapFile");
+  }
+  #endif 
+
+
+
+  #ifdef TRUE
+    cprintf("%d %s %s ", curproc->pid, curproc->state, curproc->name);
+    cprintf("allocated memory pages: %d, paged out: %d, page faults: %d, total number of paged out pages: %d\n",
+      curproc->pim + curproc->sp,
+      curproc->sp, 
+      curproc->pf,
+      curproc->ts);
+    #endif
 
   // Close all open files.
   for(fd = 0; fd < NOFILE; fd++){
@@ -362,7 +412,8 @@ scheduler(void)
 
       swtch(&(c->scheduler), p->context);
       switchkvm();
-
+      //Update the pageing framework for AQ/NFUA/LAPA
+      updatePageingFrameWork();        
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
@@ -558,5 +609,64 @@ procdump(void)
     cprintf("\n");
   }
   cprintf("\n");
+  #ifndef NONE
   cprintf("%d / %d free page frames in the system\n",freePages,totalFreePages);
+  #endif
 }
+
+void
+updatePageingFrameWork(){
+  #ifndef NONE
+  #ifndef SCFIFO
+  struct proc* p;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state == RUNNING || p->state == RUNNABLE || p->state == SLEEPING){
+      if(strncmp(p->name,"init",4) && strncmp(p->name,"sh",2)){
+        #ifndef AQ
+        for(int i = 0 ; i < MAX_PSYC_PAGES ; i++){
+          if(p->pd[i].inMem){
+            pte_t* pte = walkpgdir2(p->pgdir, p->pd[i].page);
+            if(!pte)
+              panic("error - updatePageingFrameWork function");
+            p->pd[i].accCount = p->pd[i].accCount >> 1;
+            if(*pte & PTE_A){
+              p->pd[i].accCount |= 0x80000000;
+              *pte = *pte & ~PTE_A;
+            } 
+          }
+        }
+        #endif
+        #ifdef AQ
+        for(int i = p->pim - 1 ; i > 0 ; i--){
+          if(!p->pd[i].inMem){
+            panic("error - updatePageingFrameWork: page not in memory ");
+          }
+          pte_t* pte1 = walkpgdir2(p->pgdir, p->pd[i].va);
+          pte_t* pte2 = walkpgdir2(p->pgdir, p->pd[i - 1].va);
+          if(!pte1){
+            panic("error - updatePageingFrameWork: not pte1");
+          }
+          if(!pte2){
+            panic("error - updatePageingFrameWork: not pte2");
+          }
+          if((*pte1 & PTE_A) && (*pte2 & PTE_A)){
+            *pte1 = *pte1 & ~PTE_A;
+          } else if(!(*pte1 & PTE_A) && (*pte2 & PTE_A)){
+            struct pDet pd;
+            pd.va = p->pd[i].va;
+            pd.page = p->pd[i].page;
+            p->pd[i].va = p->pd[i - 1].va;
+            p->pd[i].page = p->pd[i - 1].page;
+            p->pd[i - 1].va = pd.va;
+            p->pd[i - 1].page = pd.page;
+            *pte2 = *pte2 & ~PTE_A;
+          } 
+        }
+        #endif
+      }
+    }
+  }
+  #endif
+  #endif
+}
+

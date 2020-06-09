@@ -37,7 +37,25 @@ exec(char *path, char **argv)
 
   if((pgdir = setupkvm()) == 0)
     goto bad;
-
+  //If the MACRO os not NONE, will create 2 level pageingFrameWork
+  #ifndef NONE
+  curproc->pim = 0;
+  curproc->sp = 0;
+  curproc->ts = 0;
+  curproc->pf = 0;
+  curproc->head = 0;
+  curproc->tail = 0;
+  for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
+    curproc->sd[i].va = 0;
+    curproc->sd[i].inSF = 0;
+    curproc->pd[i].va = 0;
+    curproc->pd[i].page = 0;
+    curproc->pd[i].accCount = 0;
+    curproc->pd[i].inMem = 0;
+  }
+  removeSwapFile(curproc);
+  createSwapFile(curproc);
+  #endif
   // Load program into memory.
   sz = 0;
   for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
