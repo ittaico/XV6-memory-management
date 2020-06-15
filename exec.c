@@ -37,6 +37,7 @@ exec(char *path, char **argv)
 
   if((pgdir = setupkvm()) == 0)
     goto bad;
+  
   //If the MACRO os not NONE, will create 2 level pageingFrameWork
   #ifndef NONE
   curproc->pim = 0;
@@ -44,7 +45,6 @@ exec(char *path, char **argv)
   curproc->ts = 0;
   curproc->pf = 0;
   curproc->head = 0;
-  curproc->tail = 0;
   for(i = 0 ; i < MAX_PSYC_PAGES ; i++){
     curproc->sd[i].va = 0;
     curproc->sd[i].inSF = 0;

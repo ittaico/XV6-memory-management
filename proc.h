@@ -42,7 +42,7 @@ struct sDet{
 struct pDet{
   void* va;                   // virtual adress
   void* page;                 // process page
-  uint accCount;              // age of page
+  uint accCount;              // access counter
   char inMem;                 // found in memory
 };
 
@@ -71,8 +71,7 @@ struct proc {
   int ts;                       // total swaps
   int pf;                       // page faults
 
-  int head;                     // head of the linked list
-  int tail;                     // tail of the linked list
+  int head;                     // head of the list
  
   struct pDet pd[MAX_PSYC_PAGES]; //page details
   struct sDet sd[MAX_PSYC_PAGES]; //swap details

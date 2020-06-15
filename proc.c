@@ -122,7 +122,6 @@ found:
   p->ts = 0;
   p->pf = 0;
   p->head = 0;
-  p->tail = 0;
 
   for(int i = 0 ; i < MAX_PSYC_PAGES ; i++){
     p->sd[i].inSF = 0;
@@ -243,7 +242,6 @@ fork(void)
       np->pd[i].inMem = curproc->pd[i].inMem;
     }
     np->head = curproc->head;
-    np->tail = curproc->tail;
   #endif
 
   np->sz = curproc->sz;
@@ -617,56 +615,57 @@ procdump(void)
 void
 updatePageingFrameWork(){
   #ifndef NONE
-  #ifndef SCFIFO
-  struct proc* p;
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->state == RUNNING || p->state == RUNNABLE || p->state == SLEEPING){
-      if(strncmp(p->name,"init",4) && strncmp(p->name,"sh",2)){
-        #ifndef AQ
-        for(int i = 0 ; i < MAX_PSYC_PAGES ; i++){
-          if(p->pd[i].inMem){
-            pte_t* pte = walkpgdir2(p->pgdir, p->pd[i].page);
-            if(!pte)
-              panic("error - updatePageingFrameWork function");
-            p->pd[i].accCount = p->pd[i].accCount >> 1;
-            if(*pte & PTE_A){
-              p->pd[i].accCount |= 0x80000000;
-              *pte = *pte & ~PTE_A;
-            } 
+    #ifndef SCFIFO
+      struct proc* p;
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state == RUNNING || p->state == RUNNABLE || p->state == SLEEPING){
+          if(strncmp(p->name,"init",4) && strncmp(p->name,"sh",2)){
+            #ifndef AQ
+            for(int i = 0 ; i < MAX_PSYC_PAGES ; i++){
+              if(p->pd[i].inMem){
+                pte_t* pte = walkpgdir2(p->pgdir, p->pd[i].page);
+                if(!pte)
+                  panic("error - updatePageingFrameWork function");
+                p->pd[i].accCount = p->pd[i].accCount >> 1;
+                if(*pte & PTE_A){
+                  p->pd[i].accCount |= 0x80000000;
+                  *pte = *pte & ~PTE_A;
+                } 
+              }
+            }
+            #endif 
+
+            #ifdef AQ
+            for(int i = p->pim - 1 ; i > 0 ; i--){
+              if(!p->pd[i].inMem){
+                panic("error - updatePageingFrameWork: page not in memory ");
+              }
+              pte_t* pte1 = walkpgdir2(p->pgdir, p->pd[i].va);
+              pte_t* pte2 = walkpgdir2(p->pgdir, p->pd[i - 1].va);
+              if(!pte1){
+                panic("error - updatePageingFrameWork: not pte1");
+              }
+              if(!pte2){
+                panic("error - updatePageingFrameWork: not pte2");
+              }
+              if((*pte1 & PTE_A) && (*pte2 & PTE_A)){
+                *pte1 = *pte1 & ~PTE_A;
+              } else if(!(*pte1 & PTE_A) && (*pte2 & PTE_A)){
+                struct pDet pd;
+                pd.va = p->pd[i].va;
+                pd.page = p->pd[i].page;
+                p->pd[i].va = p->pd[i - 1].va;
+                p->pd[i].page = p->pd[i - 1].page;
+                p->pd[i - 1].va = pd.va;
+                p->pd[i - 1].page = pd.page;
+                *pte2 = *pte2 & ~PTE_A;
+              } 
+            }
+            #endif
           }
         }
-        #endif
-        #ifdef AQ
-        for(int i = p->pim - 1 ; i > 0 ; i--){
-          if(!p->pd[i].inMem){
-            panic("error - updatePageingFrameWork: page not in memory ");
-          }
-          pte_t* pte1 = walkpgdir2(p->pgdir, p->pd[i].va);
-          pte_t* pte2 = walkpgdir2(p->pgdir, p->pd[i - 1].va);
-          if(!pte1){
-            panic("error - updatePageingFrameWork: not pte1");
-          }
-          if(!pte2){
-            panic("error - updatePageingFrameWork: not pte2");
-          }
-          if((*pte1 & PTE_A) && (*pte2 & PTE_A)){
-            *pte1 = *pte1 & ~PTE_A;
-          } else if(!(*pte1 & PTE_A) && (*pte2 & PTE_A)){
-            struct pDet pd;
-            pd.va = p->pd[i].va;
-            pd.page = p->pd[i].page;
-            p->pd[i].va = p->pd[i - 1].va;
-            p->pd[i].page = p->pd[i - 1].page;
-            p->pd[i - 1].va = pd.va;
-            p->pd[i - 1].page = pd.page;
-            *pte2 = *pte2 & ~PTE_A;
-          } 
-        }
-        #endif
       }
-    }
-  }
-  #endif
+    #endif
   #endif
 }
 
